@@ -1,0 +1,2 @@
+test 14: nu are voie sa faca preempt pt quatum expired in cadrul forkului, doar pt thread cu prioritate mai mare
+test 17: trebuie facut preempt in cadrul forkului pt quatum expired
