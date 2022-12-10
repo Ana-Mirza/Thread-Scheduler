@@ -10,11 +10,6 @@
 
 #define MAX_CAPACITY 1000
 
-static inline tid_t get_tid(void)
-{
-	return pthread_self();
-}
-
 /*
  * States a thread can be in
  */
@@ -81,6 +76,7 @@ typedef struct {
 
 /*
  * @scheduler used for scheduling threads
+ * @schedulerInit used to determine whether scheduler was initialized
  * @notFirstFork determines if fork creates first thread in system
  *               or another thread
  */
@@ -338,13 +334,7 @@ void *start_routine(void *arg) {
 
 /******************* scheduler functions *******************/
 
-/*
- * Initializes the scheduler. Returns 0 if successfully initialized
- * and -1 in case of error.
- *
- * @time_quantum defines time quantum after which the thread is preempted
- * @io defines maximum number of io events in the system
- */
+
 int so_init(unsigned int time_quantum, unsigned int io) {
     // check if arguments are valid and if scheduler is already initialized
     if (time_quantum == 0 || io > SO_MAX_NUM_EVENTS
@@ -379,13 +369,6 @@ int so_init(unsigned int time_quantum, unsigned int io) {
     return 0;
 }
 
-/*
- * Creates new thread and adds it in scheduler.
- * Returns tid of new thread created.
- *
- * @func stores handler fucion for new thread forked
- * @priority defines priority of new thread forked
- */
 tid_t so_fork(so_handler *func, unsigned int priority) {
     // check for errors
     if (func == 0 || priority > SO_MAX_PRIO) {
@@ -422,13 +405,6 @@ tid_t so_fork(so_handler *func, unsigned int priority) {
     return newThread->tid;
 }
 
-/*
- * Puts current thread on wait for io device and starts next thread
- * in priority queue. Returns 0 if io device existst and -1 
- * for invalid io.
- * 
- * @io device for which current thread waits
- */
 int so_wait(unsigned int io) {
     // check if io is valid
     if (io < 0 || io > scheduler.io || scheduler.readyPq->size == 0) {
@@ -452,12 +428,6 @@ int so_wait(unsigned int io) {
 }
 
 
-/*
- * Sends signal to all threads waiting for io device. Returns
- * number of threads signales or -1 in case of error.
- * 
- * @io device signaled
- */
 int so_signal(unsigned int io) {
     // check if io device is valid
     if (io < 0 || io >= scheduler.io) {
@@ -494,9 +464,6 @@ exec:
     return nrWokeThreads;
 }
 
-/*
- * Simulates a generic instruction. Uses time on cpu.
- */
 void so_exec(void) {
     // increase number of operations done by thread
     scheduler.runningThread->quantum++;
@@ -513,9 +480,6 @@ void so_exec(void) {
     }
 }
 
-/*
- * Frees scheduler resources and waits for all threads to finish 
- */
 void so_end(void) {
     // check if scheduler was created
     if (!schedulerInit) {
