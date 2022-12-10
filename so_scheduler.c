@@ -16,7 +16,7 @@ static inline tid_t get_tid(void)
 }
 
 /*
- * different types of states a thread can be in
+ * States a thread can be in
  */
 typedef enum {
 	NEW,
@@ -27,15 +27,15 @@ typedef enum {
 } thread_status;
 
 /*
- * struct defining a thread
+ * Struct defining a thread
  *
- * @status - saves status of thread
- * @priority - saves priority of thread
- * @quatum - saves time quantum remained for thread
- * @device - saves io device that blockes the thread
- * @handler - saves handler of thread
- * @tid - saves tid of thread
- * @sem - semaphore used for syncronization
+ * @status saves status of thread
+ * @priority saves priority of thread
+ * @quatum saves time quantum remained for thread
+ * @device saves io device that blockes the thread
+ * @handler saves handler of thread
+ * @tid saves tid of thread
+ * @sem semaphore used for syncronization
  */
 typedef struct {
     thread_status status;
@@ -48,67 +48,76 @@ typedef struct {
 } thread_t;
 
 /*
- * struct defining the priority queue used for running threads
+ * Struct defining the priority queue used for running threads
+ *
+ * @size stores size of thread priority queue 
+ * @threads is priority queue of threads
  */
 typedef struct {
     unsigned int size;
-    thread_t **readyThreads;
+    thread_t **threads;
 } pq_t;
 
 /*
- * struct defining the scheduler
+ * Struct defining the scheduler
  *
- * @init - specifies whether the scheduler was initialized or not
- * @quantum - specifies number time quatum after which a process is preempted
- * @nrTotalThreads - total number of threads in the system
- * @nrWaitingThreads - number of threads waiting for io device
- * @currentThread - current thread running
- * @totalThreads - array containing all threads in system
- * @waitingThreads - array containing all threads waiting for io device
- * @pq - priority que used for threads in READY state
+ * @init specifies whether the scheduler was initialized or not
+ * @quantum specifies number time quatum after which a process is preempted
+ * @nrTotalThreads keeps score of number of threads in the system
+ * @currentThread stores current thread running
+ * @totalThreads is array containing all threads in system
+ * @waitingPq is array of queues for threads waiting for io device
+ * @readyPq is priority queue used for threads in READY state
  */
 typedef struct {
     unsigned int quantum;
     unsigned int io;
     unsigned int nrTotalThreads;
-    unsigned int nrWaitingThreads;
     thread_t *runningThread;
     thread_t **totalThreads;
-    pq_t **waitingThreads;
-    pq_t *pq;
+    pq_t **waitingPq;
+    pq_t *readyPq;
 } scheduler_t;
 
 /*
- * @scheduler - scheduler used for threads
- * @sync - semaphore used for syncronizing threads
+ * @scheduler used for scheduling threads
+ * @notFirstFork determines if fork creates first thread in system
+ *               or another thread
  */
 scheduler_t scheduler;
 int schedulerInit;
 int notFirstFork;
 
 
-/**************** priority queue functions ****************/
 
-// adds thread in priority queue of ready threads
+/******************* priority queue functions *******************/
+
+
+/*
+ * Adds thread in priority queue of threads
+ */
 void pq_add(pq_t *pq, thread_t *thread) {
-    pq->readyThreads[pq->size] = thread;
+    pq->threads[pq->size] = thread;
     pq->size++;
 }
 
-// returns next thread to run
+/*
+ * Returns thread with highest priority in queue
+ * and deletes it from queue
+ */
 thread_t *pq_pop(pq_t *pq) {
     // check if there are threads in the queue
     if (!pq->size) {
         return NULL;
     }
 
-    thread_t *thread = pq->readyThreads[0];
+    thread_t *thread = pq->threads[0];
     int max = thread->priority;
     int index = 0;
 
     // Round Robin: find thread with maximum priority
     for(int i = 1; i < pq->size; i++) {
-        thread_t *current = pq->readyThreads[i];
+        thread_t *current = pq->threads[i];
         if (current->priority > max) {
             thread = current;
             max = current->priority;
@@ -118,25 +127,29 @@ thread_t *pq_pop(pq_t *pq) {
 
     // delete thread from queue
     for (int i = index; i < pq->size; i++) {
-        thread_t *nextThread = pq->readyThreads[i + 1];
-        pq->readyThreads[i] = nextThread;
+        thread_t *nextThread = pq->threads[i + 1];
+        pq->threads[i] = nextThread;
     }
     pq->size -= 1;
 
     return thread;
 }
 
+/* 
+ * Returns next thread in priority queue without
+ * removing it from queue
+ */
 thread_t *pq_peek(pq_t *pq) {
     // check if there are threads in the queue
     if (!pq->size) {
         return NULL;
     }
 
-    thread_t *thread = pq->readyThreads[0];
+    thread_t *thread = pq->threads[0];
     int max = thread->priority;
     // find first thread with maximum priority
     for(int i = 1; i < pq->size; i++) {
-        thread_t *current = pq->readyThreads[i];
+        thread_t *current = pq->threads[i];
         if (current->priority > max) {
             thread = current;
             max = current->priority;
@@ -147,7 +160,8 @@ thread_t *pq_peek(pq_t *pq) {
 }
 
 
-/**************** helper functions ****************/
+
+/******************* helper functions *******************/
 
 
 /*
@@ -177,18 +191,18 @@ int check_scheduler() {
     if (scheduler.runningThread->status == WAITING) {
         // reset thread status and place in waiting queue
         thread_t *thread = scheduler.runningThread;
-        pq_add(scheduler.waitingThreads[thread->io], thread);
+        pq_add(scheduler.waitingPq[thread->io], thread);
 
         // schedule next thread from queue
-        update_scheduler(pq_pop(scheduler.pq));
+        update_scheduler(pq_pop(scheduler.readyPq));
         return 0;
     }
 
     // check if thread is terminated
     if (scheduler.runningThread->status == TERMINATED) {
-        if (!scheduler.pq->size)
+        if (!scheduler.readyPq->size)
             return 0;
-        update_scheduler(pq_pop(scheduler.pq));
+        update_scheduler(pq_pop(scheduler.readyPq));
         return 0;
     }
 
@@ -199,14 +213,14 @@ int check_scheduler() {
         thread->status = READY;
 
         // check if other threads are in READY state
-        if (!scheduler.pq->size) {
+        if (!scheduler.readyPq->size) {
             update_scheduler(thread);
             return 1;
         }
         // place current thread back on queue
-        pq_add(scheduler.pq, thread);
+        pq_add(scheduler.readyPq, thread);
         // scheduler thread with highest priority
-        update_scheduler(pq_pop(scheduler.pq));
+        update_scheduler(pq_pop(scheduler.readyPq));
 
         return 1;
     }
@@ -220,11 +234,11 @@ int check_scheduler() {
  */
 int check_signaled_threads() {
     // check if higher priority thread was signaled
-    if (pq_peek(scheduler.pq)->priority > scheduler.runningThread->priority) {
+    if (pq_peek(scheduler.readyPq)->priority > scheduler.runningThread->priority) {
         // scheduler higher priority thread
         scheduler.runningThread->status = READY;
-        pq_add(scheduler.pq, scheduler.runningThread);
-        update_scheduler(pq_pop(scheduler.pq));
+        pq_add(scheduler.readyPq, scheduler.runningThread);
+        update_scheduler(pq_pop(scheduler.readyPq));
         return 1;
     }
     return 0;
@@ -237,7 +251,7 @@ int check_signaled_threads() {
 int check_new_thread() {
     // check if there is a thread running
     if (scheduler.runningThread == NULL) {
-        update_scheduler(pq_pop(scheduler.pq));
+        update_scheduler(pq_pop(scheduler.readyPq));
         return 0;
     }
 
@@ -246,8 +260,8 @@ int check_new_thread() {
         > scheduler.runningThread->priority) {
             // preempt current thread
             scheduler.runningThread->status = READY;
-            pq_add(scheduler.pq, scheduler.runningThread);
-            update_scheduler(pq_pop(scheduler.pq));
+            pq_add(scheduler.readyPq, scheduler.runningThread);
+            update_scheduler(pq_pop(scheduler.readyPq));
             return 1;
     }
 
@@ -275,7 +289,7 @@ thread_t *load_thread(so_handler *handler, unsigned int priority) {
 }
 
 /*
- * frees all thread structures
+ * Frees all thread structures
  */
 void free_threads() {
     for (int i = 0; i < scheduler.nrTotalThreads; i++) {
@@ -285,16 +299,19 @@ void free_threads() {
 }
 
 /*
- * frees memory of queues for waiting threads
+ * Frees memory of queues for waiting threads
  */
 void free_waiting_threads() {
     for (int i = 0; i < SO_MAX_NUM_EVENTS; i++) {
-        free(scheduler.waitingThreads[i]->readyThreads);
-        free(scheduler.waitingThreads[i]);
+        free(scheduler.waitingPq[i]->threads);
+        free(scheduler.waitingPq[i]);
     }
-    free(scheduler.waitingThreads);
+    free(scheduler.waitingPq);
 }
 
+/*
+ * Routine function performed by all threads in system
+ */
 void *start_routine(void *arg) {
     // wait for thread to be scheduled
     thread_t *thread = (thread_t *)arg;
@@ -308,18 +325,26 @@ void *start_routine(void *arg) {
     thread->handler(thread->priority);
     // end thread
     thread->status = TERMINATED;
-    // update scheduler
-    if (!scheduler.pq->size) {
+    // update scheduler with next thread scheduled if exists
+    if (!scheduler.readyPq->size) {
         return NULL;
     }
+    update_scheduler(pq_pop(scheduler.readyPq));
 
-    update_scheduler(pq_pop(scheduler.pq));
     return NULL;
 }
 
 
-/**************** scheduler functions ****************/
 
+/******************* scheduler functions *******************/
+
+/*
+ * Initializes the scheduler. Returns 0 if successfully initialized
+ * and -1 in case of error.
+ *
+ * @time_quantum defines time quantum after which the thread is preempted
+ * @io defines maximum number of io events in the system
+ */
 int so_init(unsigned int time_quantum, unsigned int io) {
     // check if arguments are valid and if scheduler is already initialized
     if (time_quantum == 0 || io > SO_MAX_NUM_EVENTS
@@ -337,24 +362,30 @@ int so_init(unsigned int time_quantum, unsigned int io) {
     scheduler.totalThreads = malloc(MAX_CAPACITY * sizeof(thread_t*));
 
     // initialize queues for waiting threads
-    scheduler.nrWaitingThreads = 0;
-    scheduler.waitingThreads = malloc(SO_MAX_NUM_EVENTS * sizeof(pq_t*));
+    scheduler.waitingPq = malloc(SO_MAX_NUM_EVENTS * sizeof(pq_t*));
     for (int i = 0; i < SO_MAX_NUM_EVENTS; i++) {
-        scheduler.waitingThreads[i] = malloc(sizeof(pq_t));
-        scheduler.waitingThreads[i]->size = 0;
-        scheduler.waitingThreads[i]->readyThreads =
+        scheduler.waitingPq[i] = malloc(sizeof(pq_t));
+        scheduler.waitingPq[i]->size = 0;
+        scheduler.waitingPq[i]->threads =
          malloc(MAX_CAPACITY * sizeof(thread_t*));
     }
 
     // initialize queue for ready threads
-    scheduler.pq = malloc(sizeof(pq_t));
-    scheduler.pq->size = 0;
-    (scheduler.pq)->readyThreads = malloc(MAX_CAPACITY * sizeof(thread_t*));
+    scheduler.readyPq = malloc(sizeof(pq_t));
+    scheduler.readyPq->size = 0;
+    (scheduler.readyPq)->threads = malloc(MAX_CAPACITY * sizeof(thread_t*));
     scheduler.runningThread = NULL;
 
     return 0;
 }
 
+/*
+ * Creates new thread and adds it in scheduler.
+ * Returns tid of new thread created.
+ *
+ * @func stores handler fucion for new thread forked
+ * @priority defines priority of new thread forked
+ */
 tid_t so_fork(so_handler *func, unsigned int priority) {
     // check for errors
     if (func == 0 || priority > SO_MAX_PRIO) {
@@ -365,8 +396,7 @@ tid_t so_fork(so_handler *func, unsigned int priority) {
     thread_t *newThread = load_thread(func, priority);
 
     // create new thread
-    if (pthread_create(&newThread->tid, NULL,
-         &start_routine, (void *)newThread)) {
+    if (pthread_create(&newThread->tid, NULL, &start_routine, (void *)newThread)) {
         perror("pthread_create");
         return INVALID_TID;
     }
@@ -374,7 +404,7 @@ tid_t so_fork(so_handler *func, unsigned int priority) {
     // add new thread in array of threads and in queue
     scheduler.totalThreads[scheduler.nrTotalThreads++] = newThread;
     newThread->status = READY;
-    pq_add(scheduler.pq, newThread);
+    pq_add(scheduler.readyPq, newThread);
 
     // check if current thread needs to be preempted
     thread_t *current = scheduler.runningThread;
@@ -384,6 +414,7 @@ tid_t so_fork(so_handler *func, unsigned int priority) {
             perror("sem_wait");
         }
     } else if (notFirstFork) {
+        // add time quantum if the fork was not for first thread
         so_exec();
     }
     notFirstFork = 1;
@@ -391,9 +422,16 @@ tid_t so_fork(so_handler *func, unsigned int priority) {
     return newThread->tid;
 }
 
+/*
+ * Puts current thread on wait for io device and starts next thread
+ * in priority queue. Returns 0 if io device existst and -1 
+ * for invalid io.
+ * 
+ * @io device for which current thread waits
+ */
 int so_wait(unsigned int io) {
     // check if io is valid
-    if (io < 0 || io > scheduler.io || scheduler.pq->size == 0) {
+    if (io < 0 || io > scheduler.io || scheduler.readyPq->size == 0) {
         return -1;
     }
 
@@ -413,6 +451,13 @@ int so_wait(unsigned int io) {
     return 0;
 }
 
+
+/*
+ * Sends signal to all threads waiting for io device. Returns
+ * number of threads signales or -1 in case of error.
+ * 
+ * @io device signaled
+ */
 int so_signal(unsigned int io) {
     // check if io device is valid
     if (io < 0 || io >= scheduler.io) {
@@ -421,12 +466,12 @@ int so_signal(unsigned int io) {
 
     // wake up threads waiting on io device
     int nrWokeThreads = 0;
-    pq_t *ioQueue = scheduler.waitingThreads[io];
+    pq_t *ioQueue = scheduler.waitingPq[io];
     while (ioQueue->size) {
         thread_t *thread = pq_pop(ioQueue);
         thread->status = READY;
         // add in ready queue
-        pq_add(scheduler.pq, thread);
+        pq_add(scheduler.readyPq, thread);
         nrWokeThreads++;
     }
 
@@ -449,6 +494,9 @@ exec:
     return nrWokeThreads;
 }
 
+/*
+ * Simulates a generic instruction. Uses time on cpu.
+ */
 void so_exec(void) {
     // increase number of operations done by thread
     scheduler.runningThread->quantum++;
@@ -465,6 +513,9 @@ void so_exec(void) {
     }
 }
 
+/*
+ * Frees scheduler resources and waits for all threads to finish 
+ */
 void so_end(void) {
     // check if scheduler was created
     if (!schedulerInit) {
@@ -495,14 +546,13 @@ void so_end(void) {
     schedulerInit = 0;
     notFirstFork = 0;
     scheduler.nrTotalThreads = 0;
-    scheduler.nrWaitingThreads = 0;
     scheduler.runningThread = NULL;
 
     // free waiting threads queues
     free_waiting_threads();
     // free queue of ready threads
-    free((scheduler.pq)->readyThreads);
-    free(scheduler.pq);
+    free((scheduler.readyPq)->threads);
+    free(scheduler.readyPq);
 
     return;
 }
